@@ -1,4 +1,4 @@
-#!/usr/bin/bash env
+        #!/usr/bin/bash env
 
 set -euo pipefail
 trap 's=$?; echo >&2 "$0: Error on line "$LINENO": $BASH_COMMAND"; exit $s' ERR
@@ -29,7 +29,8 @@ Help()
    echo "p     Project Name - e.g. 20220406_FH_TR"
    echo "v     Version: new or old"
    echo "r     no. of runs"
-   echo "R     perform post-processing in R"
+   echo "R    perform post-processing in R"
+   echo "QC    perform QC of the MaxQuant run"
    echo "c     use config-file"
    echo "h     Print this help"
    echo
@@ -39,6 +40,7 @@ Help()
 version="new"
 runs=1
 R="no"
+QC="no"
 c="no"
 
 # get values of flags
@@ -50,6 +52,7 @@ do
         r) runs=${OPTARG};;
         p) projname=${OPTARG};;
         R) R=${OPTARG};;
+        QC) R=${OPTARG};;
 	c) c=${OPTARG};;
         h) # display Help
            Help
@@ -65,6 +68,7 @@ if [ $c ==  "yes" ]; then
 	runs=$r
 	projname=$p
 	R=$R
+	QC=$QC
 fi
 
 #######################
@@ -93,6 +97,18 @@ if [ -f "./$projname/mqpar/$filename.xml" ]; then
   exit 1
 fi
 
+# activate conda base environment
+source /apps/anaconda3/etc/profile.d/conda.sh
+conda activate base
+
+# create mqpar file for QC samples
+if [[ "$filename" == "QC" ]]; then
+  export projname
+  python ./bin/create-mqpar-file.py
+  filename="mqpar_QC_$projname"
+  mv ./mqpar_tmp/mqpar_QC_updated.xml ./mqpar_tmp/$filename.xml
+  echo "mqpar file automated created - name: ./mqpar_tmp/$filename.xml" | tee -a log.txt
+fi 
 
 ########################
 # settings
@@ -192,6 +208,25 @@ if [ $R ==  "yes" ] && [[ $runs == 1 ]]; then
     fi
     echo "post-processing R sucessful" | tee -a log.txt
     echo "result file: ./$projname/evaluation/post-processing-$filename.html" | tee -a log.txt
+fi
+
+###############################
+# QC
+###############################
+
+# post-processing only works if one run is performed
+if [ $QC ==  "yes" ] && [[ $runs == 1 ]]; then
+    echo "#####################################" | tee -a log.txt
+    echo "Performing QC" | tee -a log.txt
+    echo "#####################################" | tee -a log.txt
+    mkdir -p ./$projname/QC
+    #path="/proj/proteomics/testR"
+    path="/proj/proteomics/$projname/results/results\_run$runs\_$filename"
+    Rscript ./bin/run-QC.R $path
+    #move file
+    cp -rf $(find $path -type f -name "*.html") ./$projname/QC/QC-$filename.html
+    echo "QC R successful" | tee -a log.txt
+    echo "result file: ./$projname/QC/QC-$filename.html" | tee -a log.txt
 fi
 
 ###############################
