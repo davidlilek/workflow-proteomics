@@ -1,0 +1,87 @@
+---
+output:
+  html_document:
+    df_print: paged
+    fig.align: center
+    self_contained: yes
+    fig.height: 4
+    fig.width: 8
+    theme: united
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+    number_sections: no
+    code_folding: hide
+params:
+  title: 
+    label: "Title"
+    value: "DataAnalysis - Postprocessing Results MaxQuant QC samples"
+  author:
+    label: "Author"
+    value: ""
+  path:
+    label: "File path"
+    value: "<path to protein groupus file>/proteinGroups.txt"
+title: "`r params$title`"
+author: "`r params$author`"
+date: "`r format(Sys.time(), '%d %B %Y, %X')`"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+#load libraries
+library(tidyverse)
+library(dplyr)
+library(gplots)
+```
+
+```{r}
+#load data and filtering function
+
+path <- params$path
+data_raw <- read.csv(path, dec=".", sep="\t")
+
+source("filtering_function.R")
+data <- filtering(data_raw) 
+
+filteredout <- nrow(data_raw)-nrow(data)
+
+print("Filtered out")
+filteredout
+```
+
+# At least 1 peptide
+
+```{r}
+#select only unique peptides
+uniq.razor <- data %>% select(starts_with("Razor...unique.peptides"))
+#replace -Inf values by NA
+uniq.razor[uniq.razor < 1] <- NA
+#get sums of identified proteins
+boxplot(colSums(!is.na(uniq.razor[-1])))
+print(colSums(!is.na(uniq.razor[-1])))
+m <- mean(colSums(!is.na(uniq.razor[-1])))
+```
+**Mean no protein identifications ID more than 1 peptide**
+
+`r round(m, 2)`
+
+## At least 2 peptides 
+
+```{r}
+#select only unique peptides
+uniq.razor <- data %>% select(starts_with("Razor...unique.peptides"))
+#replace -Inf values by NA
+uniq.razor[uniq.razor < 2] <- NA
+#get sums of identified proteins
+boxplot(colSums(!is.na(uniq.razor[-1])))
+print(colSums(!is.na(uniq.razor[-1])))
+m <- mean(colSums(!is.na(uniq.razor[-1])))
+```
+**Mean no protein identifications ID more than 2 peptides**
+
+`r round(m, 2)`

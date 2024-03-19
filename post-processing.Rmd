@@ -1,0 +1,422 @@
+---
+output:
+  html_document:
+    df_print: paged
+    fig.align: center
+    self_contained: yes
+    fig.height: 4
+    fig.width: 8
+    theme: united
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+    number_sections: yes
+    code_folding: hide
+params:
+  title: 
+    label: "Title"
+    value: "DataAnalysis - Postprocessing Results MaxQuant"
+  author:
+    label: "Author"
+    value: ""
+  path:
+    label: "File path"
+    value: "N:/1_A_Bachelor_Master_Intern/00_M_2022/David/Data/3_20220406_TR/20220406_TR_QC_MBR_rerun_4masterthesis/"
+  unique: 
+    label: "Number of unique peptides for identification"
+    value: 2
+  protein_types:
+    label: "Protein types"
+    input: select 
+    value: ["RAZOR","UNIQUE","LFQ"]
+    multiple: TRUE
+    choices: ["RAZOR","UNIQUE","LFQ"]  
+  SAVE: 
+    label: "Save summarized results"
+    value: "FALSE"
+    input: select
+    choices: ["FALSE","CSV","RDS"]
+title: "`r params$title`"
+author: "`r params$author`"
+date: "`r format(Sys.time(), '%d %B %Y, %X')`"
+---
+
+# Global Parameters 
+
+```{r}
+###############################
+#
+#define settings
+#
+###############################
+
+GET_SAMPLE_NAMES <- TRUE # if set to FALSE define it in the next line
+#sample_names_user <- c()
+
+unique <- params$unique  # how many peptides should be at least necessary to identify a protein
+
+
+# which types should be evaluated TRUE or FALSE could be used
+RAZOR <- FALSE
+UNIQUE <- FALSE
+LFQ <- FALSE
+if (any(grepl("RAZOR",params$protein_types))){
+  RAZOR <- TRUE
+}
+if (any(grepl("UNIQUE",params$protein_types))){
+  UNIQUE <- TRUE
+}
+if (any(grepl("LFQ",params$protein_types))){
+  LFQ <- TRUE
+}
+
+# define path of the proteinGroups.txt file(s)
+path = params$path
+
+# save files | options
+# FALSE - results are not saved
+# "RDS" - save results into R data file format
+# "CSV" - save results into a csv file
+SAVE <- "FALSE"
+if (any(grepl("RDS",params$SAVE))){
+  SAVE <- "RDS"
+}
+if (any(grepl("CSV",params$SAVE))){
+  SAVE <- "CSV"
+}
+```
+
+# Introduction
+
+## Unique | Razor&Unique procedure
+
+Filtering:
+
+-   `Potential.contaminant != "+"` -> remove where contaminants
+-   `Reverse != "+"`-> remove where reverse = +
+-   `Only.identified.by.site != "+"` -> remove where only identified by site = +
+
+-   `data[name] >= unique` -> keep only identifications which have greater or equal number (defined via variable `unique`) of `razor/unique peptides ` | typically this is set to 1 or 2
+
+`Data analysis` show the number of identified proteins and the heatmap. In `Summary` the final results are visualized as boxplot and a table with the summarized values is shown.
+
+## LFQ-Procedure
+
+Filtering:
+
+-   `Potential.contaminant != "+"` -> remove where contaminants = +
+-   `Reverse != "+"`-> remove where reverse = +
+-   `Only.identified.by.site != "+"` -> remove where only identified by site = +
+
+Then the `log2`of the LFQ intensities is calculated and all `-Inf` values were substituted by NA using the following command: `lfq[lfq == -Inf] <- NA`
+
+`Data analysis` show the number of identified proteins and the heatmap. In `Summary` the final results are visualized as boxplot and a table with the summarized values is shown.
+
+# Load required packages and functions
+
+```{r start, message=FALSE, warning=FALSE, include=FALSE}
+start_time = format(Sys.time(), '%X')
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# load libraries
+library(tidyverse)
+library(dplyr)
+library(pheatmap)
+library(ggplot2)
+library(reshape)
+library(knitr)
+# load functions
+source("filtering_function.R")
+print("loading sucessful")
+```
+
+# Data Analysis
+
+The txt-files of the defined folder are read in, processed and filtered automatically. This section shows the code, heatmaps for LFQ values and also some summary statistics.
+
+```{r, results="asis"}
+########## read in all data with pattern .txt
+# get file list
+file.list <- list.files(path = path, pattern='*.txt')
+# create file path
+file.path <- paste(path,file.list,sep = "")
+# read in files - for each file one variable is created - results are stored in a list
+res_raw <- lapply(file.path, read.delim)
+names(res_raw) <- file.list
+
+########## get sample names
+if (GET_SAMPLE_NAMES == TRUE){
+  #get sample names
+  tmp <- colnames(res_raw[[1]])
+  tmp <- tmp[grep("Razor...unique.peptides.",tmp)]
+  tmp <- sub(".*Razor...unique.peptides.", "",tmp)
+  sample_names_raw <- tmp
+  rm(tmp)
+  #create sample names
+  sample_names_razor <- paste("Razor...unique.peptides.",sample_names_raw, sep="")
+  sample_names_unique <- paste("Unique.peptides.",sample_names_raw, sep="")
+  sample_names_lfq <- paste("LFQ.intensity.",sample_names_raw, sep="")
+} else {
+  for (i in 1:length(file.list)){
+    # rename columns
+    res_raw[[i]] <- res_raw[[i]] %>%
+       rename_with(~ paste("Razor_", sample_names_user, sep = ""),
+                   starts_with("Razor...unique.peptides.")) %>%
+       rename_with(~ paste("Unique_", sample_names_user, sep = ""),
+                   starts_with("Unique.peptides.")) %>%
+       rename_with(~ paste("LFQ_", sample_names_user, sep = ""),
+                   starts_with("LFQ.intensity."))
+    # get column names
+    sample_names_razor <- colnames(res_raw[[i]][grep("Razor_",
+                                                colnames(res_raw[[i]]))])
+    sample_names_unique <- colnames(res_raw[[i]][grep("Unique_",
+                                                colnames(res_raw[[i]]))])
+    sample_names_lfq <- colnames(res_raw[[i]][grep("LFQ_",
+                                                 colnames(res_raw[[i]]))])
+    }
+}
+
+########## create result data frame & result lists
+# create data frame for razor
+results_2gether_razor <- data.frame(matrix(ncol = length(sample_names_razor), nrow = length(file.list)))
+row.names(results_2gether_razor) <- file.list
+colnames(results_2gether_razor) <- sample_names_razor
+#create data frame for unique
+results_2gether_unique <- data.frame(matrix(ncol = length(sample_names_unique), nrow = length(file.list)))
+row.names(results_2gether_unique) <- file.list
+colnames(results_2gether_unique) <- sample_names_unique
+#create data frame for lfq
+results_2gether_lfq <- data.frame(matrix(ncol = length(sample_names_lfq), nrow = length(file.list)))
+row.names(results_2gether_lfq) <- file.list
+colnames(results_2gether_lfq) <- sample_names_lfq
+
+#results lists
+results_razor <- list()
+results_unique <- list()
+results_lfq <- list()
+
+########## perform evaluation
+if (RAZOR == TRUE) {
+  cat("\n")
+  cat("##","Razor","\n")
+  cat("\n")
+  for (x in file.list){
+    cat("\n")
+    cat("###",substring(x, 1, nchar(x)-4),"\n")
+    data_raw <- as.data.frame(res_raw[[x]])
+    data <- filtering(data_raw)
+    results <- data.frame(matrix(ncol = length(sample_names_razor), nrow = nrow(data)))
+    colnames(results) <- sample_names_razor
+    i <- 0
+    for (i in 1:length(sample_names_razor)){
+      name <- sample_names_razor[i]
+      tmp <- (data[name] >= unique)
+      results[i] <- tmp
+      cat(name,"<br/>",sum(tmp, na.rm = TRUE),"<br/>")
+    }
+    results_razor[[x]] <- results
+    results_2gether_razor[x,] <- sapply(results,function(x)sum(x, na.rm = TRUE))
+    cat("\n")
+    
+        #create heatmaps
+    paletteLength <- 2
+    myColor <- colorRampPalette(c("navy", "white",
+                                  "firebrick3"))(paletteLength)
+      data4pheatmap <- results
+      data4pheatmap <- results
+      data4pheatmap <- data4pheatmap*1
+      data4pheatmap[data4pheatmap == 0] <- NA
+      # remove NA rows
+      ind <- apply(data4pheatmap, 1, function(x) all(is.na(x)))
+      data4pheatmap_clear <- data4pheatmap[!ind,]
+      data4pheatmap_clear[is.na(data4pheatmap_clear)] <- 0
+      if (ncol(data4pheatmap_clear) < 2){
+        cat("\n")
+        cat("##"," No heatmap possible. Too less columns in the result
+            table.","\n")
+      } else {
+        pheatmap(data4pheatmap_clear,
+                 legend_breaks = c(0,1),
+                 color = myColor,
+                 treeheight_row = 10,
+                 angle_col ="45",
+                 treeheight_col = 10,
+                 legend = TRUE,
+                 labels_row = rep("",nrow(data4pheatmap)),
+                 labels_col = sample_names_raw)
+        cat("\n")
+      }
+  }
+}
+
+if (UNIQUE == TRUE) {
+  cat("\n")
+  cat("##","Unique","\n")
+  cat("\n")
+  for (x in file.list){
+    cat("\n")
+    cat("###",substring(x, 1, nchar(x)-4),"\n")
+    data_raw <- as.data.frame(res_raw[[x]])
+    data <- filtering(data_raw)
+    results <- data.frame(matrix(ncol = length(sample_names_unique), nrow = nrow(data)))
+    colnames(results) <- sample_names_unique
+    i <- 0
+    for (i in 1:length(sample_names_unique)){
+      name <- sample_names_unique[i]
+      tmp <- (data[name] >= unique)
+      results[i] <- tmp
+      cat(name,"<br/>",sum(tmp, na.rm = TRUE),"<br/>")
+    }
+    results_unique[[x]] <- results
+    results_2gether_unique[x,] <- sapply(results,function(x)sum(x, na.rm = TRUE))
+    cat("\n")
+    #create heatmaps
+    paletteLength <- 2
+    myColor <- colorRampPalette(c("navy", "white",
+                                  "firebrick3"))(paletteLength)
+      data4pheatmap <- results
+      data4pheatmap <- data4pheatmap*1
+      data4pheatmap[data4pheatmap == 0] <- NA
+      # remove NA rows
+      ind <- apply(data4pheatmap, 1, function(x) all(is.na(x)))
+      data4pheatmap_clear <- data4pheatmap[!ind,]
+      data4pheatmap_clear[is.na(data4pheatmap_clear)] <- 0
+      if (ncol(data4pheatmap) < 2){
+        cat("\n")
+        cat("##"," No heatmap possible. Too less columns in the result
+            table.","\n")
+      } else {
+        pheatmap(data4pheatmap_clear,
+                 legend_breaks = c(0,1),
+                 color = myColor,
+                 treeheight_row = 10,
+                 angle_col ="45",
+                 treeheight_col = 10,
+                 legend = TRUE,
+                 labels_row = rep("",nrow(data4pheatmap)),
+                 labels_col = sample_names_raw)
+        cat("\n")
+      }
+  }
+}
+
+if (LFQ == TRUE) {
+  cat("\n")
+  cat("##","LFQ","\n")
+  cat("\n")
+  for (x in file.list){
+    cat("\n")
+    cat("###",substring(x, 1, nchar(x)-4),"\n")
+    data_raw <- as.data.frame(res_raw[[x]])
+    data <- filtering(data_raw)
+    
+    results <- data.frame(matrix(ncol = length(sample_names_lfq), nrow = nrow(data)))
+    colnames(results) <- sample_names_lfq
+    i <- 0
+    for (i in 1:length(sample_names_lfq)){
+      name <- sample_names_lfq[i]
+      tmp <- log2(data[name])
+      tmp[tmp == -Inf] <- NA
+      results[i] <- tmp
+      cat(name,"<br/>",sum(!is.na(tmp)),"<br/>")
+      
+    }
+    
+    results_lfq[[x]] <- results
+    results_2gether_lfq[x,] <- sapply(results,function(x)sum(!is.na(x)))
+    cat("\n")
+    
+    #create heatmaps
+    paletteLength <- 50
+    myColor <- colorRampPalette(c("navy", "white",
+                                  "firebrick3"))(paletteLength)
+      data4pheatmap <- results
+      data4pheatmap <- results
+      data4pheatmap <- data4pheatmap*1
+      data4pheatmap[data4pheatmap == 0] <- NA
+      # remove NA rows
+      ind <- apply(data4pheatmap, 1, function(x) all(is.na(x)))
+      data4pheatmap_clear <- data4pheatmap[!ind,]
+      data4pheatmap_clear[is.na(data4pheatmap_clear)] <- 0
+      if (ncol(data4pheatmap) < 2){
+        cat("\n")
+        cat("##"," No heatmap possible. Too less columns in the result
+            table.","\n")
+      } else {
+        pheatmap(data4pheatmap_clear,
+                 color = myColor,
+                 treeheight_row = 10,
+                 angle_col ="45",
+                 treeheight_col = 10,
+                 legend = TRUE,
+                 labels_row = rep("",nrow(data4pheatmap)),
+                 labels_col = sample_names_raw)
+        cat("\n")
+      }
+  }
+}
+
+
+
+```
+
+# Summary
+
+```{r, results="asis", message=FALSE, warning=FALSE}
+# show summary
+if (RAZOR == TRUE){
+  cat("\n")
+  cat("##"," Summary Razor","\n")
+  print(kable(results_2gether_razor))
+  
+  ggplot(melt(results_2gether_razor),aes(x = variable, y = value)) +
+  geom_boxplot() + 
+  xlab("Sample name") + 
+  scale_x_discrete(labels = sample_names_raw) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "Razor")
+}
+if (UNIQUE == TRUE){
+  cat("\n")
+  cat("##"," Summary Unique","\n")
+  print(kable(results_2gether_unique))
+  
+  ggplot(melt(results_2gether_unique),aes(x = variable, y = value)) +
+  geom_boxplot() + 
+  xlab("Sample name") + 
+  scale_x_discrete(labels = sample_names_raw) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "Unique")
+}
+if (LFQ == TRUE){
+  cat("\n")
+  cat("##"," Summary LFQ","\n")
+  print(kable(results_2gether_lfq))
+  
+  ggplot(melt(results_2gether_lfq),aes(x = variable, y = value)) +
+  geom_boxplot() + 
+  xlab("Sample name") + 
+  scale_x_discrete(labels = sample_names_raw) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "LFQ")
+}
+
+# save results
+results_final <- data.frame(results_2gether_razor,results_2gether_unique,results_2gether_lfq)
+# get rid of NA columns
+results_final <- results_final[,colSums(is.na(results_final))<nrow(results_final)]
+if (SAVE == "RDS"){
+  saveRDS(results_final, "./results_final.RDS")
+} else if (SAVE == "CSV") {
+  write.csv2(results_final, "./results_final.csv")
+} 
+```
+
+# Used time
+
+```{r used time, echo=FALSE, message=TRUE, warning=FALSE}
+end_time = format(Sys.time(), '%X')
+print(paste("Time used for analysis:", round(as.difftime(end_time, units = "mins")-as.difftime(start_time, units = "mins"),digits=2),"minutes"))
+```
